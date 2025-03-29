@@ -66,6 +66,13 @@ MainWindow::MainWindow(QWidget *parent)
     QMenu *viewMenu = menuBar->addMenu("View");
     viewMenu->addAction("Zoom In", this, &MainWindow::zoomIn, QKeySequence("Ctrl++"));
     viewMenu->addAction("Zoom Out", this, &MainWindow::zoomOut, QKeySequence("Ctrl+-"));
+    QAction *toggleThumbnailsAction = viewMenu->addAction("Show Thumbnails");
+    toggleThumbnailsAction->setCheckable(true);
+    toggleThumbnailsAction->setChecked(true); // default on
+    connect(toggleThumbnailsAction, &QAction::toggled, this, [this](bool enabled) {
+        showThumbnails = enabled;
+        thumbList->setVisible(enabled);
+    });
     viewMenu->addSeparator();
     QAction *continuousScrollAction = viewMenu->addAction("Continuous Scroll");
     continuousScrollAction->setCheckable(true);
@@ -280,39 +287,44 @@ void MainWindow::openDjvuFile(const QString &filePath) {
     thumbnails.clear();
     thumbList->blockSignals(true);
 
-    for (int i = 0; i < pageCount; ++i) {
-        ddjvu_page_t *page = ddjvu_page_create_by_pageno(doc, i);
-        while (!ddjvu_page_decoding_done(page))
-            ddjvu_message_wait(ctx);
+    if (!showThumbnails) {
+        thumbList->hide();
+    } else {
+        for (int i = 0; i < pageCount; ++i) {
+            ddjvu_page_t *page = ddjvu_page_create_by_pageno(doc, i);
+            while (!ddjvu_page_decoding_done(page))
+                ddjvu_message_wait(ctx);
 
-        int w = ddjvu_page_get_width(page);
-        int h = ddjvu_page_get_height(page);
-        double thumbScale = 80.0 / w;
-        int tw = static_cast<int>(w * thumbScale);
-        int th = static_cast<int>(h * thumbScale);
+            int w = ddjvu_page_get_width(page);
+            int h = ddjvu_page_get_height(page);
+            double thumbScale = 80.0 / w;
+            int tw = static_cast<int>(w * thumbScale);
+            int th = static_cast<int>(h * thumbScale);
 
-        ddjvu_rect_t rrect = {0, 0, static_cast<unsigned int>(tw), static_cast<unsigned int>(th)};
-        ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
-        ddjvu_format_set_row_order(fmt, 1);
-        QByteArray buffer(tw * th * 3, 0);
-        ddjvu_page_render(page, DDJVU_RENDER_COLOR, &rrect, &rrect, fmt, tw * 3, buffer.data());
-        ddjvu_format_release(fmt);
+            ddjvu_rect_t rrect = {0, 0, static_cast<unsigned int>(tw), static_cast<unsigned int>(th)};
+            ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+            ddjvu_format_set_row_order(fmt, 1);
+            QByteArray buffer(tw * th * 3, 0);
+            ddjvu_page_render(page, DDJVU_RENDER_COLOR, &rrect, &rrect, fmt, tw * 3, buffer.data());
+            ddjvu_format_release(fmt);
 
-        QImage thumbImg((uchar *)buffer.data(), tw, th, tw * 3, QImage::Format_RGB888);
-        thumbnails.push_back(thumbImg.copy());
+            QImage thumbImg((uchar *)buffer.data(), tw, th, tw * 3, QImage::Format_RGB888);
+            thumbnails.push_back(thumbImg.copy());
 
-        QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(thumbnails[i])), "");
-        thumbList->addItem(item);
+            QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(thumbnails[i])), "");
+            thumbList->addItem(item);
 
-        ddjvu_page_release(page);
+            ddjvu_page_release(page);
+        }
+        thumbList->blockSignals(false);
+        thumbList->setCurrentRow(0);
+        // enableContinuousScroll(false);
+        // enableFacingPages(false);
     }
 
-    thumbList->blockSignals(false);
-    thumbList->setCurrentRow(0);
-    // enableContinuousScroll(false);
-    // enableFacingPages(false);
     loadSinglePage();
-    thumbList->show();
+    if (showThumbnails)
+        thumbList->show();
 
     if (centralWidget())
         centralWidget()->setFocus(Qt::OtherFocusReason);
@@ -817,11 +829,6 @@ void MainWindow::openPdfFile(const QString &filePath) {
     zoom = 1.0;
     fitToWindow = true;
 
-    pageInput->setMaximum(pageCount);
-    thumbList->clear();
-    thumbnails.clear();
-    thumbList->hide();
-
     // Update recent files
     QSettings settings("MyCompany", "BookReader");
     QStringList list = settings.value("recentFiles").toStringList();
@@ -842,44 +849,24 @@ void MainWindow::openPdfFile(const QString &filePath) {
     thumbnails.clear();
     thumbList->blockSignals(true);
 
-    // for (int i = 0; i < pageCount; ++i) {
-    //     auto page = pdfDoc->page(i);
-    //     if (!page)
-    //         continue;
+    if (!showThumbnails) {
+        thumbList->hide();
+    } else {
+        ThumbnailWorker *worker = new ThumbnailWorker(pdfDoc.get(), this);
+        connect(worker, &ThumbnailWorker::thumbnailReady, this, [this](int i, QImage image) {
+            if (i >= thumbnails.size())
+                thumbnails.resize(i + 1);
+            thumbnails[i] = image;
 
-    //     QSizeF size = page->pageSizeF();
-    //     int w = static_cast<int>(size.width());
-    //     int h = static_cast<int>(size.height());
-    //     double thumbScale = 80.0 / w;
-    //     int tw = static_cast<int>(w * thumbScale);
-    //     int th = static_cast<int>(h * thumbScale);
-
-    //     QImage thumbImg = page->renderToImage(thumbScale * 72.0, thumbScale * 72.0);
-
-    //     if (!thumbImg.isNull()) {
-    //         thumbnails.push_back(thumbImg.copy());
-    //         QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(thumbImg)), "");
-    //         thumbList->addItem(item);
-    //     }
-    // }
-
-    ThumbnailWorker *worker = new ThumbnailWorker(pdfDoc.get(), this);
-    connect(worker, &ThumbnailWorker::thumbnailReady, this, [this](int i, QImage image) {
-        if (i >= thumbnails.size())
-            thumbnails.resize(i + 1);
-        thumbnails[i] = image;
-
-        QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(image)), "");
-        thumbList->insertItem(i, item);
-    });
-    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
-    connect(this, &QObject::destroyed, worker, &QThread::quit);
-    connect(this, &QObject::destroyed, worker, &QObject::deleteLater);
-    worker->start();
-
-    thumbList->blockSignals(false);
-    thumbList->setCurrentRow(0);
-    thumbList->show();
+            QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(image)), "");
+            thumbList->insertItem(i, item);
+        });
+        connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+        connect(this, &QObject::destroyed, worker, &QThread::quit);
+        connect(this, &QObject::destroyed, worker, &QObject::deleteLater);
+        worker->start();
+        thumbList->show();
+    }
 
     loadPage(currentPage);
 }

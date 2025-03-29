@@ -123,6 +123,8 @@ private:
 
     Theme currentTheme = Theme::Dark; // default
 
+    bool showThumbnails = true;
+
     void applyTheme(Theme theme);
     void enableContinuousScroll(bool enabled);
     void enableFacingPages(bool enabled);
