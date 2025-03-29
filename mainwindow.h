@@ -104,6 +104,7 @@ private:
     QMenu *recentFilesMenu = nullptr;
     void updateRecentFilesMenu();
 
+    bool nightMode = false;
     bool isDarkMode = true;
     bool isFullScreen = false;
     QString currentFilePath;
@@ -129,5 +130,7 @@ private:
     void enableContinuousScroll(bool enabled);
     void enableFacingPages(bool enabled);
     void loadSinglePage();
+    QImage applyNightMode(const QImage &input);
+
     QImage renderPdfPage(int pageNum, double scale);
 };

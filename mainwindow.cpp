@@ -73,6 +73,13 @@ MainWindow::MainWindow(QWidget *parent)
         showThumbnails = enabled;
         thumbList->setVisible(enabled);
     });
+    QAction *toggleNightMode = viewMenu->addAction("Night Mode");
+    toggleNightMode->setCheckable(true);
+    toggleNightMode->setChecked(false);
+    connect(toggleNightMode, &QAction::toggled, this, [this](bool enabled) {
+        nightMode = enabled;
+        loadPage(currentPage);
+    });
     viewMenu->addSeparator();
     QAction *continuousScrollAction = viewMenu->addAction("Continuous Scroll");
     continuousScrollAction->setCheckable(true);
@@ -346,6 +353,9 @@ void MainWindow::loadPage(int pageNum)
         while (!ddjvu_page_decoding_done(page))
             ddjvu_message_wait(ctx);
         image = renderPage(page, -1);
+        if (nightMode && !image.isNull()) {
+            image = applyNightMode(image);
+        }
         ddjvu_page_release(page);
     }
 
@@ -371,10 +381,11 @@ void MainWindow::loadPage(int pageNum)
     pageInput->setValue(currentPage + 1);
     pageInput->blockSignals(false);
 
-    thumbList->blockSignals(true);
-    thumbList->setCurrentRow(currentPage);
-    thumbList->blockSignals(false);
-
+    if (showThumbnails) {
+        thumbList->blockSignals(true);
+        thumbList->setCurrentRow(currentPage);
+        thumbList->blockSignals(false);
+    }
 
     if (centralWidget())
         centralWidget()->setFocus(Qt::OtherFocusReason);
@@ -608,6 +619,27 @@ void MainWindow::loadSinglePage()
     }
 }
 
+QImage MainWindow::applyNightMode(const QImage &input) {
+    QImage img = input.convertToFormat(QImage::Format_ARGB32);
+    for (int y = 0; y < img.height(); ++y) {
+        QRgb *line = reinterpret_cast<QRgb *>(img.scanLine(y));
+        for (int x = 0; x < img.width(); ++x) {
+            QColor color = QColor::fromRgba(line[x]);
+            int invertedRed = 255 - color.red();
+            int invertedGreen = 255 - color.green();
+            int invertedBlue = 255 - color.blue();
+
+            // Apply slight warm tint
+            invertedRed = std::min(255, static_cast<int>(invertedRed * 1.1));
+            invertedBlue = static_cast<int>(invertedBlue * 0.9);
+
+            line[x] = qRgba(invertedRed, invertedGreen, invertedBlue, color.alpha());
+        }
+    }
+
+    return img;
+}
+
 void MainWindow::enableContinuousScroll(bool enabled) {
     continuousScrollMode = enabled;
 
@@ -664,6 +696,10 @@ void MainWindow::enableContinuousScroll(bool enabled) {
                 continue;
 
             image = raw.scaledToWidth(targetWidth, Qt::SmoothTransformation);
+        }
+
+        if (nightMode && !image.isNull()) {
+            image = applyNightMode(image);
         }
 
         QLabel *pageLabel = new QLabel;
@@ -781,6 +817,9 @@ void MainWindow::enableFacingPages(bool enabled) {
         return;
     }
 
+    if (nightMode) leftImg = applyNightMode(leftImg);
+    if (nightMode && !rightImg.isNull()) rightImg = applyNightMode(rightImg);
+
     int combinedWidth = leftImg.width() + (rightImg.isNull() ? 0 : rightImg.width());
     int combinedHeight = std::max(leftImg.height(), rightImg.height());
 
@@ -882,6 +921,10 @@ QImage MainWindow::renderPdfPage(int pageNum, double scale) {
     QImage image = page->renderToImage(scale * 150, scale * 150.0);
     QSize targetSize = scrollArea->viewport()->size()*1.6;
     image = image.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+    if (nightMode && !image.isNull()) {
+        image = applyNightMode(image);
+    }
 
     return image;
 }
