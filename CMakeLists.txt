@@ -17,6 +17,8 @@ add_executable(${PROJECT_NAME}
     mainwindow.cpp
     imagelabel.h
     imagelabel.cpp
+    searchdialog.h
+    searchdialog.cpp
     main.cpp
 )
 

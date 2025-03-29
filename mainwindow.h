@@ -8,12 +8,15 @@
 #include <QSlider>
 #include <QListWidget>
 #include <qboxlayout.h>
+#include <QTreeView>
 
 #include "imagelabel.h"
+#include "searchdialog.h"
 
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
+#include <qtreewidget.h>
 
 
 extern "C" {
@@ -96,6 +99,8 @@ private:
     QPushButton *nextBtn;
     QPushButton *prevBtn;
 
+    SearchDialog* searchDialog;
+
     QLabel *pageLabel;
     QSpinBox *pageInput;
 
@@ -136,6 +141,10 @@ private:
     void refreshThumbnails();
     void saveLastReadState();
     void loadLastReadState(const QString &filePath);
+    void addOutlineItemRecursive(const Poppler::OutlineItem &item, QTreeWidgetItem *parent);
+
+    void searchNext(const QString& text);
+    void searchPrevious(const QString& text);
 
     bool autoNightMode = true;
     int warmthLevel = 20; // 0–100, default warm
@@ -145,4 +154,16 @@ private:
 
     int lastSearchPage = -1;
     QString lastSearchText;
+
+    // QWidget *searchBar = nullptr;
+    // QLineEdit *searchEdit = nullptr;
+    // QPushButton *searchNextBtn = nullptr;
+    // QPushButton *searchPrevBtn = nullptr;
+    // QPushButton *searchCloseBtn = nullptr;
+    QTreeWidget *outlineTree = nullptr;
+
+    QListWidget *searchResultsList = nullptr;
+
+    void searchAllPages(const QString &text);
+
 };

@@ -18,6 +18,8 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QLineEdit>
+#include <QShortcut>
+#include <QTreeWidgetItem>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ctx(ddjvu_context_create("djvu_reader"))
@@ -190,6 +192,12 @@ MainWindow::MainWindow(QWidget *parent)
         applyTheme(Theme::Sepia);
     });
 
+    QAction *toggleOutline = viewMenu->addAction("Toggle Outline");
+    toggleOutline->setCheckable(true);
+    toggleOutline->setChecked(false);
+    connect(toggleOutline, &QAction::toggled, this, [this](bool visible) {
+        outlineTree->setVisible(visible);
+    });
     QAction *toggleFullScreenAction = viewMenu->addAction("Toggle Full Screen");
     toggleFullScreenAction->setShortcut(QKeySequence("F11"));
     connect(toggleFullScreenAction, &QAction::triggered, this, [this]() {
@@ -221,6 +229,21 @@ MainWindow::MainWindow(QWidget *parent)
 
     setMenuBar(menuBar);
 
+    outlineTree = new QTreeWidget;
+    outlineTree->setHeaderHidden(true);
+    outlineTree->setFixedWidth(200);
+    outlineTree->hide(); // hidden by default
+
+    connect(outlineTree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
+        QVariant value = item->data(0, Qt::UserRole);
+        if (!value.isValid())
+            return;
+
+        int page = value.toInt();
+        if (page >= 0 && page < pageCount)
+            loadPage(page);
+    });
+
     scrollArea = new QScrollArea;
     imageLabel = new ImageLabel;
     imageLabel->setText("Open a file");
@@ -243,10 +266,9 @@ MainWindow::MainWindow(QWidget *parent)
     pageInput->setMinimum(1);
     pageInput->setMaximum(1);
 
-    QLineEdit *searchEdit = new QLineEdit;
-    searchEdit->setPlaceholderText("Search in document...");
-    QPushButton *searchNextBtn = new QPushButton("Next");
-    QPushButton *searchPrevBtn = new QPushButton("Previous");
+    searchResultsList = new QListWidget;
+    searchResultsList->setFixedWidth(220);
+    searchResultsList->hide(); // hidden by default
 
     QHBoxLayout *btnLayout = new QHBoxLayout;
     btnLayout->addSpacerItem(new QSpacerItem(scrollArea->width()/5, 0, QSizePolicy::Fixed));
@@ -267,22 +289,62 @@ MainWindow::MainWindow(QWidget *parent)
     thumbList->setSpacing(5);
     thumbList->hide();
 
+    QShortcut *shortcut = new QShortcut(QKeySequence("Ctrl+F"), this);
+
+    connect(shortcut, &QShortcut::activated, this, [this]() {
+        if (!doc && !pdfDoc)
+            return;
+
+        if (!searchDialog)
+        {
+            searchDialog = new SearchDialog(this);
+            connect(searchDialog, &SearchDialog::searchNext, this, [this]() {
+                qDebug() << "@@@@@@@@@@@@@@SearchNext";
+                QString text = searchDialog->searchText().trimmed();
+                if (!text.isEmpty()) {
+                    lastSearchText = text;
+                    searchNext(text);
+                }
+            });
+
+            connect(searchDialog, &SearchDialog::searchPrev, this, [this]() {
+                QString text = searchDialog->searchText().trimmed();
+                if (!text.isEmpty()) {
+                    lastSearchText = text;
+                    qDebug() << "@@@@@@@@@@@@@@@@1";
+                    searchNext(text);
+
+                    searchPrevious(text);
+                }
+            });
+
+            connect(searchDialog, &SearchDialog::searchAll, this, [this]() {
+                QString text = searchDialog->searchText().trimmed();
+                if (!text.isEmpty()) {
+                    lastSearchText = text;
+                    searchAllPages(text);
+                }
+            });
+        }
+
+        searchDialog->show();
+        searchDialog->raise();
+        searchDialog->activateWindow();
+    });
+
     QVBoxLayout *rightLayout = new QVBoxLayout;
     rightLayout->addWidget(scrollArea);
     rightLayout->addLayout(btnLayout);
 
     QHBoxLayout *mainLayout = new QHBoxLayout;
     mainLayout->addWidget(thumbList);
+    mainLayout->addWidget(searchResultsList);  // Left of document view
+    mainLayout->addWidget(outlineTree);
     mainLayout->addLayout(rightLayout);
 
     QVBoxLayout *centralLayout = new QVBoxLayout(central);
+    // centralLayout->addWidget(searchBar);
     centralLayout->addLayout(mainLayout);
-    QHBoxLayout *searchLayout = new QHBoxLayout;
-    searchLayout->addWidget(searchEdit);
-    searchLayout->addWidget(searchPrevBtn);
-    searchLayout->addWidget(searchNextBtn);
-
-    centralLayout->addLayout(searchLayout);
 
     central->setLayout(centralLayout);
     setCentralWidget(central);
@@ -307,55 +369,9 @@ MainWindow::MainWindow(QWidget *parent)
             loadPage(index);
     });
 
-    connect(searchNextBtn, &QPushButton::clicked, this, [this, searchEdit]() {
-        QString text = searchEdit->text();
-        qDebug() << "@@@@@@@@@@@@@@@@1";
-        if (text.isEmpty() || !pdfDoc) return;
-
-        if (text != lastSearchText) {
-            lastSearchText = text;
-            lastSearchPage = currentPage - 1; // start after current
-        }
-
-        for (int i = lastSearchPage + 1; i < pdfDoc->numPages(); ++i) {
-            auto page = pdfDoc->page(i);
-            if (!page) continue;
-
-            QString pageText = page->text(QRectF());
-            if (pageText.contains(text, Qt::CaseInsensitive)) {
-                lastSearchPage = i;
-                loadPage(i);
-                return;
-            }
-        }
-
-        QMessageBox::information(this, "Search", "No more results.");
-    });
-
-    connect(searchPrevBtn, &QPushButton::clicked, this, [this, searchEdit]() {
-        qDebug() << "@@@@@@@@@@@@@@@@2";
-
-        QString text = searchEdit->text();
-        if (text.isEmpty() || !pdfDoc) return;
-
-        if (text != lastSearchText) {
-            lastSearchText = text;
-            lastSearchPage = currentPage + 1; // start before current
-        }
-
-        for (int i = lastSearchPage - 1; i >= 0; --i) {
-            auto page = pdfDoc->page(i);
-            if (!page) continue;
-
-            QString pageText = page->text(QRectF());
-            if (pageText.contains(text, Qt::CaseInsensitive)) {
-                lastSearchPage = i;
-                loadPage(i);
-                return;
-            }
-        }
-
-        QMessageBox::information(this, "Search", "No previous results.");
+    connect(searchResultsList, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+        int page = item->data(Qt::UserRole).toInt();
+        loadPage(page);
     });
 }
 
@@ -663,6 +679,19 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent *event) {
+    if (event->key() == Qt::Key_Escape && searchDialog && searchDialog->isVisible()) {
+        searchDialog->setVisible(false);
+        lastSearchText.clear();
+        return;
+    }
+
+    if (event->key() == Qt::Key_Enter && searchDialog && searchDialog->isVisible()) {
+        QString text = searchDialog->searchText();
+        qDebug() << "@@@@@@@@@@@@@@@@1";
+        searchNext(text);
+        return;
+    }
+
     if (event->key() == Qt::Key_Space) {
         if (continuousScrollMode) {
             int delta = scrollArea->viewport()->height();
@@ -1052,6 +1081,9 @@ void MainWindow::openPdfFile(const QString &filePath) {
         return;
     }
 
+    outlineTree->clear();
+    outlineTree->hide();
+
     pageCount = pdfDoc->numPages();
     currentPage = 0;
     zoom = 1.0;
@@ -1105,6 +1137,15 @@ void MainWindow::openPdfFile(const QString &filePath) {
         thumbList->show();
     }
 
+    outlineTree->reset();
+
+    if (pdfDoc) {
+        QList<Poppler::OutlineItem> rootItems = pdfDoc->outline();
+        if (!rootItems.isEmpty()) {
+            for (const Poppler::OutlineItem &item : rootItems)
+                addOutlineItemRecursive(item, nullptr);
+        }
+    }
     loadPage(currentPage);
 }
 
@@ -1125,6 +1166,33 @@ QImage MainWindow::renderPdfPage(int pageNum, double scale) {
     }
 
     return image;
+}
+
+void MainWindow::searchAllPages(const QString &text) {
+    if (!pdfDoc || text.isEmpty())
+        return;
+
+    searchResultsList->clear();
+    searchResultsList->show();
+
+    for (int i = 0; i < pdfDoc->numPages(); ++i) {
+        auto page = pdfDoc->page(i);
+        if (!page) continue;
+
+        QString pageText = page->text(QRectF());
+        if (pageText.contains(text, Qt::CaseInsensitive)) {
+            // Extract short snippet with match
+            int idx = pageText.indexOf(text, 0, Qt::CaseInsensitive);
+            QString snippet = pageText.mid(std::max(0, idx - 20), text.length() + 40).replace('\n', ' ').trimmed();
+
+            QListWidgetItem *item = new QListWidgetItem(QString("Page %1: %2").arg(i + 1).arg(snippet));
+            item->setData(Qt::UserRole, i); // store page index
+            searchResultsList->addItem(item);
+        }
+    }
+
+    if (searchResultsList->count() == 0)
+        searchResultsList->hide();
 }
 
 void MainWindow::saveLastReadState() {
@@ -1154,6 +1222,85 @@ void MainWindow::loadLastReadState(const QString &filePath) {
     nightMode = settings.value(key + "/nightMode", nightMode).toBool();
     facingPagesMode = settings.value(key + "/facingPagesMode", false).toBool();
     continuousScrollMode = settings.value(key + "/continuousScrollMode", false).toBool();
+}
+
+void MainWindow::addOutlineItemRecursive(const Poppler::OutlineItem &item, QTreeWidgetItem *parent) {
+    if (!pdfDoc)
+        return;
+
+    // Resolve the page number
+    int pageNumber = -1;
+
+    if (!item.destination().isNull()) {
+        pageNumber = item.destination()->pageNumber();
+    }
+
+    // Skip if page number is invalid
+    if (pageNumber < 0 || pageNumber >= pageCount)
+        return;
+
+    // Create the tree widget item
+    QTreeWidgetItem *treeItem = new QTreeWidgetItem();
+    treeItem->setText(0, item.name());
+    treeItem->setData(0, Qt::UserRole, pageNumber);
+
+    if (parent)
+        parent->addChild(treeItem);
+    else
+        outlineTree->addTopLevelItem(treeItem);
+
+    // Recursively add children
+    for (const Poppler::OutlineItem &child : item.children()) {
+        addOutlineItemRecursive(child, treeItem);
+    }
+}
+
+void MainWindow::searchNext(const QString &text)
+{
+    if (text.isEmpty() || !pdfDoc) return;
+
+    if (text != lastSearchText) {
+        lastSearchText = text;
+        lastSearchPage = currentPage - 1; // start after current
+    }
+
+    for (int i = lastSearchPage + 1; i < pdfDoc->numPages(); ++i) {
+        auto page = pdfDoc->page(i);
+        if (!page) continue;
+
+        QString pageText = page->text(QRectF());
+        if (pageText.contains(text, Qt::CaseInsensitive)) {
+            lastSearchPage = i;
+            loadPage(i);
+            return;
+        }
+    }
+
+    QMessageBox::information(this, "Search", "No more results.");
+}
+
+void MainWindow::searchPrevious(const QString &text)
+{
+    if (text.isEmpty() || !pdfDoc) return;
+
+    if (text != lastSearchText) {
+        lastSearchText = text;
+        lastSearchPage = currentPage + 1; // start before current
+    }
+
+    for (int i = lastSearchPage - 1; i >= 0; --i) {
+        auto page = pdfDoc->page(i);
+        if (!page) continue;
+
+        QString pageText = page->text(QRectF());
+        if (pageText.contains(text, Qt::CaseInsensitive)) {
+            lastSearchPage = i;
+            loadPage(i);
+            return;
+        }
+    }
+
+    QMessageBox::information(this, "Search", "No previous results.");
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
