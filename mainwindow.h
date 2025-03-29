@@ -142,4 +142,7 @@ private:
     QImage applyNightMode(const QImage &input);
 
     QImage renderPdfPage(int pageNum, double scale);
+
+    int lastSearchPage = -1;
+    QString lastSearchText;
 };

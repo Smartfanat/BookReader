@@ -17,6 +17,7 @@
 #include <QCheckBox>
 #include <QMimeData>
 #include <QUrl>
+#include <QLineEdit>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ctx(ddjvu_context_create("djvu_reader"))
@@ -242,6 +243,11 @@ MainWindow::MainWindow(QWidget *parent)
     pageInput->setMinimum(1);
     pageInput->setMaximum(1);
 
+    QLineEdit *searchEdit = new QLineEdit;
+    searchEdit->setPlaceholderText("Search in document...");
+    QPushButton *searchNextBtn = new QPushButton("Next");
+    QPushButton *searchPrevBtn = new QPushButton("Previous");
+
     QHBoxLayout *btnLayout = new QHBoxLayout;
     btnLayout->addSpacerItem(new QSpacerItem(scrollArea->width()/5, 0, QSizePolicy::Fixed));
     btnLayout->addWidget(prevBtn);
@@ -271,6 +277,13 @@ MainWindow::MainWindow(QWidget *parent)
 
     QVBoxLayout *centralLayout = new QVBoxLayout(central);
     centralLayout->addLayout(mainLayout);
+    QHBoxLayout *searchLayout = new QHBoxLayout;
+    searchLayout->addWidget(searchEdit);
+    searchLayout->addWidget(searchPrevBtn);
+    searchLayout->addWidget(searchNextBtn);
+
+    centralLayout->addLayout(searchLayout);
+
     central->setLayout(centralLayout);
     setCentralWidget(central);
     setWindowTitle("Book Reader");
@@ -292,6 +305,57 @@ MainWindow::MainWindow(QWidget *parent)
     connect(thumbList, &QListWidget::currentRowChanged, this, [this](int index) {
         if (index >= 0 && index < pageCount && index != currentPage)
             loadPage(index);
+    });
+
+    connect(searchNextBtn, &QPushButton::clicked, this, [this, searchEdit]() {
+        QString text = searchEdit->text();
+        qDebug() << "@@@@@@@@@@@@@@@@1";
+        if (text.isEmpty() || !pdfDoc) return;
+
+        if (text != lastSearchText) {
+            lastSearchText = text;
+            lastSearchPage = currentPage - 1; // start after current
+        }
+
+        for (int i = lastSearchPage + 1; i < pdfDoc->numPages(); ++i) {
+            auto page = pdfDoc->page(i);
+            if (!page) continue;
+
+            QString pageText = page->text(QRectF());
+            if (pageText.contains(text, Qt::CaseInsensitive)) {
+                lastSearchPage = i;
+                loadPage(i);
+                return;
+            }
+        }
+
+        QMessageBox::information(this, "Search", "No more results.");
+    });
+
+    connect(searchPrevBtn, &QPushButton::clicked, this, [this, searchEdit]() {
+        qDebug() << "@@@@@@@@@@@@@@@@2";
+
+        QString text = searchEdit->text();
+        if (text.isEmpty() || !pdfDoc) return;
+
+        if (text != lastSearchText) {
+            lastSearchText = text;
+            lastSearchPage = currentPage + 1; // start before current
+        }
+
+        for (int i = lastSearchPage - 1; i >= 0; --i) {
+            auto page = pdfDoc->page(i);
+            if (!page) continue;
+
+            QString pageText = page->text(QRectF());
+            if (pageText.contains(text, Qt::CaseInsensitive)) {
+                lastSearchPage = i;
+                loadPage(i);
+                return;
+            }
+        }
+
+        QMessageBox::information(this, "Search", "No previous results.");
     });
 }
 
@@ -350,6 +414,8 @@ void MainWindow::openDjvuFile(const QString &filePath) {
     fitToWindow = true;
 
     pageInput->setMaximum(pageCount);
+
+    loadLastReadState(currentFilePath);
 
     thumbList->blockSignals(true);
     thumbList->clear();
@@ -419,6 +485,31 @@ void MainWindow::loadPage(int pageNum)
     if (isPdf) {
         double scale = fitToWindow ? scrollArea->viewport()->width() / 800.0 : zoom;
         image = renderPdfPage(pageNum, scale);
+
+        if (!lastSearchText.isEmpty()) {
+            auto page = pdfDoc->page(pageNum);
+            if (page) {
+                std::vector<std::unique_ptr<Poppler::TextBox>> boxes = page->textList();
+                QPainter painter(&image);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(255, 255, 0, 128)); // semi-transparent yellow
+
+                for (const auto& box : boxes) {
+                    if (box->text().contains(lastSearchText, Qt::CaseInsensitive)) {
+                        QRectF rect = box->boundingBox();
+                        QRect scaledRect(
+                            int(rect.left() * image.width() / page->pageSizeF().width()),
+                            int(rect.top() * image.height() / page->pageSizeF().height()),
+                            int(rect.width() * image.width() / page->pageSizeF().width()),
+                            int(rect.height() * image.height() / page->pageSizeF().height())
+                            );
+                        painter.drawRoundedRect(scaledRect, 3, 3);
+                    }
+                }
+                painter.end();
+            }
+        }
+
     } else {
         ddjvu_page_t *page = ddjvu_page_create_by_pageno(doc, pageNum);
         while (!ddjvu_page_decoding_done(page))
@@ -966,6 +1057,8 @@ void MainWindow::openPdfFile(const QString &filePath) {
     zoom = 1.0;
     fitToWindow = true;
 
+    loadLastReadState(currentFilePath);
+
     // Update recent files
     QSettings settings("MyCompany", "BookReader");
     QStringList list = settings.value("recentFiles").toStringList();
@@ -1011,8 +1104,6 @@ void MainWindow::openPdfFile(const QString &filePath) {
         worker->start();
         thumbList->show();
     }
-
-    loadLastReadState(currentFilePath);
 
     loadPage(currentPage);
 }
