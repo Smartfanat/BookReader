@@ -53,6 +53,12 @@ private:
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
+    enum class Theme {
+        Light,
+        Dark,
+        Sepia
+    };
+
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
@@ -115,7 +121,9 @@ private:
     std::unique_ptr<Poppler::Document > pdfDoc = nullptr;
     bool isPdf = false;
 
-    void applyDarkMode(bool enable);
+    Theme currentTheme = Theme::Dark; // default
+
+    void applyTheme(Theme theme);
     void enableContinuousScroll(bool enabled);
     void enableFacingPages(bool enabled);
     void loadSinglePage();

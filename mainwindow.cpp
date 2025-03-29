@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QFileDialog>
 #include <QProgressDialog>
+#include <QActionGroup>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ctx(ddjvu_context_create("djvu_reader"))
@@ -90,10 +91,31 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
 
-    QAction *toggleDarkAction = viewMenu->addAction("Dark Mode");
-    toggleDarkAction->setCheckable(true);
-    toggleDarkAction->setChecked(true);
-    connect(toggleDarkAction, &QAction::toggled, this, &MainWindow::applyDarkMode);
+    QMenu *themeMenu = viewMenu->addMenu("Theme");
+
+    QAction *lightTheme = themeMenu->addAction("Light");
+    QAction *darkTheme = themeMenu->addAction("Dark");
+    QAction *sepiaTheme = themeMenu->addAction("Sepia");
+
+    QActionGroup *themeGroup = new QActionGroup(this);
+    themeGroup->addAction(lightTheme);
+    themeGroup->addAction(darkTheme);
+    themeGroup->addAction(sepiaTheme);
+
+    lightTheme->setCheckable(true);
+    darkTheme->setCheckable(true);
+    sepiaTheme->setCheckable(true);
+    darkTheme->setChecked(true); // default
+
+    connect(lightTheme, &QAction::triggered, this, [this]() {
+        applyTheme(Theme::Light);
+    });
+    connect(darkTheme, &QAction::triggered, this, [this]() {
+        applyTheme(Theme::Dark);
+    });
+    connect(sepiaTheme, &QAction::triggered, this, [this]() {
+        applyTheme(Theme::Sepia);
+    });
 
     QAction *toggleFullScreenAction = viewMenu->addAction("Toggle Full Screen");
     toggleFullScreenAction->setShortcut(QKeySequence("F11"));
@@ -519,42 +541,48 @@ void MainWindow::updateRecentFilesMenu() {
     }
 }
 
-void MainWindow::applyDarkMode(bool enable) {
-    isDarkMode = enable;
-    qApp->setStyleSheet(enable ? R"(
-        QWidget {
-            background-color: #121212;
-            color: #eeeeee;
-        }
+void MainWindow::applyTheme(Theme theme) {
+    currentTheme = theme;
 
-        QPushButton {
-            background-color: #1e1e1e;
-            color: #ffffff;
-            border: 1px solid #333;
-            padding: 4px;
-        }
+    switch (theme) {
+    case Theme::Dark:
+        qApp->setStyleSheet(R"(
+            QWidget { background-color: #121212; color: #eeeeee; }
+            QPushButton {
+                background-color: #1e1e1e; color: #ffffff;
+                border: 1px solid #333; padding: 4px;
+            }
+            QPushButton:hover { background-color: #2a2a2a; }
+            QScrollArea { background-color: #1a1a1a; }
+            QLabel { color: #eeeeee; }
+            QMenuBar, QMenu {
+                background-color: #1e1e1e; color: #ffffff;
+            }
+            QMenu::item:selected { background-color: #2a2a2a; }
+        )");
+        break;
 
-        QPushButton:hover {
-            background-color: #2a2a2a;
-        }
+    case Theme::Light:
+        qApp->setStyleSheet(""); // Default Qt style
+        break;
 
-        QScrollArea {
-            background-color: #1a1a1a;
-        }
-
-        QLabel {
-            color: #eeeeee;
-        }
-
-        QMenuBar, QMenu {
-            background-color: #1e1e1e;
-            color: #ffffff;
-        }
-
-        QMenu::item:selected {
-            background-color: #2a2a2a;
-        }
-    )" : "");
+    case Theme::Sepia:
+        qApp->setStyleSheet(R"(
+            QWidget { background-color: #f4ecd8; color: #5b4636; }
+            QPushButton {
+                background-color: #e6d3b3; color: #5b4636;
+                border: 1px solid #b39b74; padding: 4px;
+            }
+            QPushButton:hover { background-color: #ddc9a6; }
+            QScrollArea { background-color: #f4ecd8; }
+            QLabel { color: #5b4636; }
+            QMenuBar, QMenu {
+                background-color: #e8dcc2; color: #5b4636;
+            }
+            QMenu::item:selected { background-color: #d2c1a4; }
+        )");
+        break;
+    }
 }
 
 void MainWindow::loadSinglePage()
