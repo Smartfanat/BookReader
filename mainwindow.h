@@ -99,6 +99,7 @@ private:
 
     QListWidget *thumbList;
     QVector<QImage> thumbnails;
+    QVector<QImage> originalThumbnails;
 
     QStringList recentFiles;
     QMenu *recentFilesMenu = nullptr;
@@ -130,6 +131,11 @@ private:
     void enableContinuousScroll(bool enabled);
     void enableFacingPages(bool enabled);
     void loadSinglePage();
+    void refreshThumbnails();
+
+
+    bool autoNightMode = true;
+    int warmthLevel = 20; // 0–100, default warm
     QImage applyNightMode(const QImage &input);
 
     QImage renderPdfPage(int pageNum, double scale);

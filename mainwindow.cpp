@@ -13,12 +13,23 @@
 #include <QFileDialog>
 #include <QProgressDialog>
 #include <QActionGroup>
+#include <QCheckBox>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ctx(ddjvu_context_create("djvu_reader"))
 {
     QWidget *central = new QWidget;
     this->setMinimumSize(800, 600);
+
+    QSettings settings("MyCompany", "BookReader");
+    nightMode = settings.value("nightMode", false).toBool();
+    warmthLevel = settings.value("warmthLevel", 20).toInt();
+    autoNightMode = settings.value("autoNightMode", true).toBool();
+
+    QTime now = QTime::currentTime();
+    if (autoNightMode && now.hour() >= 20 && !nightMode) {
+        nightMode = true;
+    }
 
     // === Menu Bar ===
     QMenuBar *menuBar = new QMenuBar(this);
@@ -75,11 +86,53 @@ MainWindow::MainWindow(QWidget *parent)
     });
     QAction *toggleNightMode = viewMenu->addAction("Night Mode");
     toggleNightMode->setCheckable(true);
-    toggleNightMode->setChecked(false);
+
+    toggleNightMode->setChecked(nightMode);
+
     connect(toggleNightMode, &QAction::toggled, this, [this](bool enabled) {
         nightMode = enabled;
+        QSettings settings("MyCompany", "BookReader");
+        settings.setValue("nightMode", nightMode);
+
+        refreshThumbnails();
         loadPage(currentPage);
     });
+    viewMenu->addAction("Adjust Night Mode Warmth", this, [this]() {
+        QDialog dialog(this);
+        dialog.setWindowTitle("Night Mode Settings");
+
+        QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+        QLabel *label = new QLabel("Warmth Level (0–100):");
+        QSlider *slider = new QSlider(Qt::Horizontal);
+        slider->setRange(0, 100);
+        slider->setValue(warmthLevel);
+
+        QCheckBox *autoNightBox = new QCheckBox("Enable Night Mode Automatically After 8PM");
+        autoNightBox->setChecked(autoNightMode);
+
+        layout->addWidget(label);
+        layout->addWidget(slider);
+        layout->addWidget(autoNightBox);
+
+        connect(slider, &QSlider::valueChanged, this, [this](int value) {
+            warmthLevel = value;
+            QSettings settings("MyCompany", "BookReader");
+            settings.setValue("warmthLevel", warmthLevel);
+            if (nightMode)
+                loadPage(currentPage);
+        });
+
+        connect(autoNightBox, &QCheckBox::toggled, this, [this](bool enabled) {
+            autoNightMode = enabled;
+            QSettings settings("MyCompany", "BookReader");
+            settings.setValue("autoNightMode", autoNightMode);
+        });
+
+        dialog.exec();
+    });
+
+
     viewMenu->addSeparator();
     QAction *continuousScrollAction = viewMenu->addAction("Continuous Scroll");
     continuousScrollAction->setCheckable(true);
@@ -290,7 +343,8 @@ void MainWindow::openDjvuFile(const QString &filePath) {
 
     pageInput->setMaximum(pageCount);
 
-    thumbList->clear();
+    thumbnails.clear();
+    originalThumbnails.clear();
     thumbnails.clear();
     thumbList->blockSignals(true);
 
@@ -316,7 +370,12 @@ void MainWindow::openDjvuFile(const QString &filePath) {
             ddjvu_format_release(fmt);
 
             QImage thumbImg((uchar *)buffer.data(), tw, th, tw * 3, QImage::Format_RGB888);
+
+            if (nightMode)
+                thumbImg = applyNightMode(thumbImg);
+
             thumbnails.push_back(thumbImg.copy());
+            originalThumbnails.push_back(thumbImg.copy());
 
             QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(thumbnails[i])), "");
             thumbList->addItem(item);
@@ -619,26 +678,50 @@ void MainWindow::loadSinglePage()
     }
 }
 
+void MainWindow::refreshThumbnails() {
+    if (!showThumbnails || originalThumbnails.isEmpty()) return;
+
+    thumbList->blockSignals(true);
+    thumbList->clear();
+    thumbnails.clear();
+
+    for (int i = 0; i < originalThumbnails.size(); ++i) {
+        QImage img = nightMode ? applyNightMode(originalThumbnails[i]) : originalThumbnails[i];
+        thumbnails.push_back(img);
+
+        QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(img)), "");
+        thumbList->addItem(item);
+    }
+
+    thumbList->setCurrentRow(currentPage);
+    thumbList->scrollToItem(thumbList->currentItem(), QAbstractItemView::PositionAtCenter);
+    thumbList->blockSignals(false);
+}
+
 QImage MainWindow::applyNightMode(const QImage &input) {
     QImage img = input.convertToFormat(QImage::Format_ARGB32);
     for (int y = 0; y < img.height(); ++y) {
         QRgb *line = reinterpret_cast<QRgb *>(img.scanLine(y));
         for (int x = 0; x < img.width(); ++x) {
-            QColor color = QColor::fromRgba(line[x]);
-            int invertedRed = 255 - color.red();
-            int invertedGreen = 255 - color.green();
-            int invertedBlue = 255 - color.blue();
+            QColor color = QColor::fromRgb(line[x]);
 
-            // Apply slight warm tint
-            invertedRed = std::min(255, static_cast<int>(invertedRed * 1.1));
-            invertedBlue = static_cast<int>(invertedBlue * 0.9);
+            int h, s, v;
+            color.getHsv(&h, &s, &v);
 
-            line[x] = qRgba(invertedRed, invertedGreen, invertedBlue, color.alpha());
+            // Invert brightness
+            v = 255 - v;
+
+            // Add warmth by shifting hue slightly toward red/yellow
+            h = (h + warmthLevel) % 360;
+
+            QColor newColor;
+            newColor.setHsv(h, s, v);
+            line[x] = newColor.rgba();
         }
     }
-
     return img;
 }
+
 
 void MainWindow::enableContinuousScroll(bool enabled) {
     continuousScrollMode = enabled;
@@ -893,8 +976,16 @@ void MainWindow::openPdfFile(const QString &filePath) {
     } else {
         ThumbnailWorker *worker = new ThumbnailWorker(pdfDoc.get(), this);
         connect(worker, &ThumbnailWorker::thumbnailReady, this, [this](int i, QImage image) {
-            if (i >= thumbnails.size())
+            if (i >= thumbnails.size()) {
                 thumbnails.resize(i + 1);
+                originalThumbnails.resize(i + 1);
+            }
+
+            originalThumbnails[i] = image;
+
+            if (nightMode)
+                image = applyNightMode(image);
+
             thumbnails[i] = image;
 
             QListWidgetItem *item = new QListWidgetItem(QIcon(QPixmap::fromImage(image)), "");
