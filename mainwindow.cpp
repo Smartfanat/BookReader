@@ -220,6 +220,8 @@ void MainWindow::openFile() {
         isPdf = true;
         openPdfFile(filePath);
     }
+
+    setWindowTitle(tr("Book Reader") + " - " +QFileInfo(filePath).fileName());
 }
 
 void MainWindow::openDjvuFile(const QString &filePath) {
@@ -335,6 +337,11 @@ void MainWindow::loadPage(int pageNum)
     pageInput->setValue(currentPage + 1);
     pageInput->blockSignals(false);
 
+    thumbList->blockSignals(true);
+    thumbList->setCurrentRow(currentPage);
+    thumbList->blockSignals(false);
+
+
     if (centralWidget())
         centralWidget()->setFocus(Qt::OtherFocusReason);
 }
@@ -377,13 +384,25 @@ QImage MainWindow::renderPage(ddjvu_page_t *page, double customScale) {
 
 
 void MainWindow::nextPage() {
-    if (currentPage + 1 < pageCount)
-        loadPage(currentPage + 1);
+    int step = facingPagesMode ? 2 : 1;
+    if (currentPage + step < pageCount)
+        currentPage += step;
+
+    if (facingPagesMode)
+        enableFacingPages(true);
+    else
+        loadPage(currentPage);
 }
 
 void MainWindow::prevPage() {
-    if (currentPage > 0)
-        loadPage(currentPage - 1);
+    int step = facingPagesMode ? 2 : 1;
+    if (currentPage - step >= 0)
+        currentPage -= step;
+
+    if (facingPagesMode)
+        enableFacingPages(true);
+    else
+        loadPage(currentPage);
 }
 
 void MainWindow::zoomIn() {
@@ -494,6 +513,8 @@ void MainWindow::updateRecentFilesMenu() {
                 isPdf = true;
                 openPdfFile(path);
             }
+
+            setWindowTitle(tr("Book Reader") + " - " +QFileInfo(path).fileName());
         });
     }
 }
@@ -547,7 +568,6 @@ void MainWindow::loadSinglePage()
     }
 }
 
-
 void MainWindow::enableContinuousScroll(bool enabled) {
     continuousScrollMode = enabled;
 
@@ -573,24 +593,38 @@ void MainWindow::enableContinuousScroll(bool enabled) {
 
     QProgressDialog progress("Rendering all pages...", "Cancel", 0, pageCount, this);
     progress.setWindowModality(Qt::ApplicationModal);
-    progress.setMinimumDuration(200); // Show after short delay
+    progress.setMinimumDuration(200);
 
     for (int i = 0; i < pageCount; ++i) {
         progress.setValue(i);
-        QApplication::processEvents(); // Let the UI update
+        QApplication::processEvents();
 
         if (progress.wasCanceled())
             break;
 
-        ddjvu_page_t *page = ddjvu_page_create_by_pageno(doc, i);
-        while (!ddjvu_page_decoding_done(page))
-            ddjvu_message_wait(ctx);
+        QImage image;
 
-        int origWidth = ddjvu_page_get_width(page);
-        double scale = static_cast<double>(targetWidth) / origWidth;
+        if (!isPdf) {
+            ddjvu_page_t *page = ddjvu_page_create_by_pageno(doc, i);
+            while (!ddjvu_page_decoding_done(page))
+                ddjvu_message_wait(ctx);
 
-        QImage image = renderPage(page, scale);
-        ddjvu_page_release(page);
+            int origWidth = ddjvu_page_get_width(page);
+            double scale = static_cast<double>(targetWidth) / origWidth;
+
+            image = renderPage(page, scale);
+            ddjvu_page_release(page);
+        } else {
+            auto page = pdfDoc->page(i);
+            if (!page)
+                continue;
+
+            QImage raw = page->renderToImage(150, 150);
+            if (raw.isNull())
+                continue;
+
+            image = raw.scaledToWidth(targetWidth, Qt::SmoothTransformation);
+        }
 
         QLabel *pageLabel = new QLabel;
         pageLabel->setPixmap(QPixmap::fromImage(image));
@@ -657,8 +691,7 @@ void MainWindow::enableFacingPages(bool enabled) {
     facingPagesMode = enabled;
 
     if (continuousScrollMode) {
-        QMessageBox::information(this, "Facing Pages",
-                                 "Disable Continuous Scroll Mode first.");
+        QMessageBox::information(this, "Facing Pages", "Disable Continuous Scroll Mode first.");
         return;
     }
 
@@ -670,42 +703,56 @@ void MainWindow::enableFacingPages(bool enabled) {
         return;
     }
 
-    // Determine left/right page pair
     int leftPage = (currentPage % 2 == 0) ? currentPage : currentPage - 1;
     int rightPage = leftPage + 1;
 
-    // Load both pages
-    ddjvu_page_t *left = ddjvu_page_create_by_pageno(doc, leftPage);
-    ddjvu_page_t *right = (rightPage < pageCount)
-                              ? ddjvu_page_create_by_pageno(doc, rightPage)
-                              : nullptr;
+    QImage leftImg, rightImg;
 
-    while (!ddjvu_page_decoding_done(left))
-        ddjvu_message_wait(ctx);
-    if (right)
-        while (!ddjvu_page_decoding_done(right))
-            ddjvu_message_wait(ctx);
+    if (isPdf) {
+        auto left = pdfDoc->page(leftPage);
+        if (left)
+            leftImg = left->renderToImage(150, 150).convertToFormat(QImage::Format_RGB888);
 
-    QImage leftImg = renderPage(left, -1);  // use viewport-based scale
-    QImage rightImg = right ? renderPage(right, -1) : QImage();
+        if (rightPage < pageCount) {
+            auto right = pdfDoc->page(rightPage);
+            if (right)
+                rightImg = right->renderToImage(150, 150).convertToFormat(QImage::Format_RGB888);
+        }
+    } else {
+        ddjvu_page_t *left = ddjvu_page_create_by_pageno(doc, leftPage);
+        ddjvu_page_t *right = (rightPage < pageCount)
+                                  ? ddjvu_page_create_by_pageno(doc, rightPage)
+                                  : nullptr;
 
-    ddjvu_page_release(left);
-    if (right) ddjvu_page_release(right);
+        while (!ddjvu_page_decoding_done(left)) ddjvu_message_wait(ctx);
+        if (right) while (!ddjvu_page_decoding_done(right)) ddjvu_message_wait(ctx);
 
-    // Combine images side-by-side
+        leftImg = renderPage(left, -1);
+        if (right)
+            rightImg = renderPage(right, -1);
+
+        ddjvu_page_release(left);
+        if (right) ddjvu_page_release(right);
+    }
+
+    // Ensure we have at least one valid image
+    if (leftImg.isNull()) {
+        QMessageBox::warning(this, "Facing Pages", "Cannot render left page.");
+        return;
+    }
+
     int combinedWidth = leftImg.width() + (rightImg.isNull() ? 0 : rightImg.width());
     int combinedHeight = std::max(leftImg.height(), rightImg.height());
 
     QImage combined(combinedWidth, combinedHeight, QImage::Format_RGB888);
-    combined.fill(Qt::black);  // background color
+    combined.fill(Qt::black);
 
-    QPainter p(&combined);
-    p.drawImage(0, 0, leftImg);
+    QPainter painter(&combined);
+    painter.drawImage(0, 0, leftImg);
     if (!rightImg.isNull())
-        p.drawImage(leftImg.width(), 0, rightImg);
-    p.end();
+        painter.drawImage(leftImg.width(), 0, rightImg);
+    painter.end();
 
-    // Scale to fit viewport
     QSize targetSize = scrollArea->viewport()->size();
     QImage scaled = combined.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
@@ -716,7 +763,14 @@ void MainWindow::enableFacingPages(bool enabled) {
     scrollArea->takeWidget();
     scrollArea->setWidget(comboLabel);
     scrollArea->setWidgetResizable(true);
+
+    thumbList->blockSignals(true);
+    thumbList->setCurrentRow(currentPage);
+    thumbList->scrollToItem(thumbList->currentItem(), QAbstractItemView::PositionAtCenter);
+    thumbList->blockSignals(false);
 }
+
+
 
 void MainWindow::openPdfFile(const QString &filePath) {
     if (pdfDoc) {
