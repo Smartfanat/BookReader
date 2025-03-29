@@ -351,10 +351,12 @@ void MainWindow::openDjvuFile(const QString &filePath) {
 
     pageInput->setMaximum(pageCount);
 
+    thumbList->blockSignals(true);
+    thumbList->clear();
+    thumbList->blockSignals(false);
+
     thumbnails.clear();
     originalThumbnails.clear();
-    thumbnails.clear();
-    thumbList->blockSignals(true);
 
     if (!showThumbnails) {
         thumbList->hide();
@@ -732,7 +734,6 @@ QImage MainWindow::applyNightMode(const QImage &input) {
     return img;
 }
 
-
 void MainWindow::enableContinuousScroll(bool enabled) {
     continuousScrollMode = enabled;
 
@@ -784,26 +785,30 @@ void MainWindow::enableContinuousScroll(bool enabled) {
             if (!page)
                 continue;
 
-            QImage raw = page->renderToImage(150, 150);
-            if (raw.isNull())
+            image = page->renderToImage(150, 150); // 150 DPI
+            if (image.isNull())
                 continue;
 
-            image = raw.scaledToWidth(targetWidth, Qt::SmoothTransformation);
+            image = image.scaledToWidth(targetWidth, Qt::SmoothTransformation);
         }
 
-        if (nightMode && !image.isNull()) {
+        if (nightMode && !image.isNull())
             image = applyNightMode(image);
-        }
 
         QLabel *pageLabel = new QLabel;
         pageLabel->setPixmap(QPixmap::fromImage(image));
         pageLabel->setAlignment(Qt::AlignCenter);
         pageLabel->setStyleSheet("margin-bottom: 10px;");
+        pageLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+
         multiPageLayout->addWidget(pageLabel);
     }
 
+    multiPageLayout->addStretch();
+
     progress.setValue(pageCount);
 }
+
 
 void MainWindow::exportToPdf() {
     if (!doc && !pdfDoc) {
@@ -973,9 +978,12 @@ void MainWindow::openPdfFile(const QString &filePath) {
 
     pageInput->setMaximum(pageCount);
 
-    thumbList->clear();
-    thumbnails.clear();
     thumbList->blockSignals(true);
+    thumbList->clear();
+    thumbList->blockSignals(false);
+
+    thumbnails.clear();
+    originalThumbnails.clear();
 
     if (!showThumbnails) {
         thumbList->hide();
