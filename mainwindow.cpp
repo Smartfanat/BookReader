@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFileDialog>
@@ -14,10 +15,14 @@
 #include <QProgressDialog>
 #include <QActionGroup>
 #include <QCheckBox>
+#include <QMimeData>
+#include <QUrl>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ctx(ddjvu_context_create("djvu_reader"))
 {
+    setAcceptDrops(true);
+
     QWidget *central = new QWidget;
     this->setMinimumSize(800, 600);
 
@@ -291,6 +296,7 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() {
+    saveLastReadState();
     if (doc) ddjvu_document_release(doc);
     if (ctx) ddjvu_context_release(ctx);
 }
@@ -299,6 +305,8 @@ void MainWindow::openFile() {
     QString filePath = QFileDialog::getOpenFileName(this, "Open File", "", "DjVu or PDF Files (*.djvu *.pdf)");
     if (filePath.isEmpty())
         return;
+
+    saveLastReadState();
 
     currentFilePath = filePath;
 
@@ -387,6 +395,8 @@ void MainWindow::openDjvuFile(const QString &filePath) {
         // enableContinuousScroll(false);
         // enableFacingPages(false);
     }
+
+    loadLastReadState(currentFilePath);
 
     loadSinglePage();
     if (showThumbnails)
@@ -961,10 +971,6 @@ void MainWindow::openPdfFile(const QString &filePath) {
     settings.setValue("recentFiles", list);
     updateRecentFilesMenu();
 
-    currentPage = 0;
-    zoom = 1.0;
-    fitToWindow = true;
-
     pageInput->setMaximum(pageCount);
 
     thumbList->clear();
@@ -998,6 +1004,8 @@ void MainWindow::openPdfFile(const QString &filePath) {
         thumbList->show();
     }
 
+    loadLastReadState(currentFilePath);
+
     loadPage(currentPage);
 }
 
@@ -1019,3 +1027,67 @@ QImage MainWindow::renderPdfPage(int pageNum, double scale) {
 
     return image;
 }
+
+void MainWindow::saveLastReadState() {
+    if (currentFilePath.isEmpty()) return;
+
+    QSettings settings("MyCompany", "BookReader");
+    QString key = "lastState/" + currentFilePath;
+
+    settings.setValue(key + "/page", currentPage);
+    settings.setValue(key + "/zoom", zoom);
+    settings.setValue(key + "/fitToWindow", fitToWindow);
+    settings.setValue(key + "/nightMode", nightMode);
+    settings.setValue(key + "/facingPagesMode", facingPagesMode);
+    settings.setValue(key + "/continuousScrollMode", continuousScrollMode);
+
+    // Save last opened file
+    settings.setValue("lastOpenedFile", currentFilePath);
+}
+
+void MainWindow::loadLastReadState(const QString &filePath) {
+    QSettings settings("MyCompany", "BookReader");
+    QString key = "lastState/" + filePath;
+
+    currentPage = settings.value(key + "/page", 0).toInt();
+    zoom = settings.value(key + "/zoom", 1.0).toDouble();
+    fitToWindow = settings.value(key + "/fitToWindow", true).toBool();
+    nightMode = settings.value(key + "/nightMode", nightMode).toBool();
+    facingPagesMode = settings.value(key + "/facingPagesMode", false).toBool();
+    continuousScrollMode = settings.value(key + "/continuousScrollMode", false).toBool();
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
+    if (event->mimeData()->hasUrls()) {
+        const auto urls = event->mimeData()->urls();
+        if (!urls.isEmpty()) {
+            QString file = urls.first().toLocalFile().toLower();
+            if (file.endsWith(".pdf") || file.endsWith(".djvu")) {
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+    event->ignore();
+}
+
+void MainWindow::dropEvent(QDropEvent *event) {
+    const auto urls = event->mimeData()->urls();
+    if (urls.isEmpty()) return;
+
+    QString filePath = urls.first().toLocalFile();
+    if (filePath.isEmpty()) return;
+
+    currentFilePath = filePath;
+
+    if (filePath.endsWith(".djvu", Qt::CaseInsensitive)) {
+        isPdf = false;
+        openDjvuFile(filePath);
+    } else if (filePath.endsWith(".pdf", Qt::CaseInsensitive)) {
+        isPdf = true;
+        openPdfFile(filePath);
+    }
+
+    event->acceptProposedAction();
+}
+

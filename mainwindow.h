@@ -66,6 +66,8 @@ public:
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 private slots:
     void openFile();
@@ -132,7 +134,8 @@ private:
     void enableFacingPages(bool enabled);
     void loadSinglePage();
     void refreshThumbnails();
-
+    void saveLastReadState();
+    void loadLastReadState(const QString &filePath);
 
     bool autoNightMode = true;
     int warmthLevel = 20; // 0–100, default warm
